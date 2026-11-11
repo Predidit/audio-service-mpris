@@ -2,27 +2,29 @@ part of 'audio_service_mpris.dart';
 
 /// https://www.freedesktop.org/wiki/Specifications/mpris-spec/metadata/
 class _Metadata {
-  _Metadata(
-      {required this.title,
-      this.length,
-      this.artist,
-      this.lyrics,
-      this.artUrl,
-      this.album,
-      this.albumArtist,
-      this.discNumber,
-      this.trackNumber,
-      this.genre});
+  _Metadata({
+    this.title,
+    this.trackId,
+    this.length,
+    this.artist,
+    this.lyrics,
+    this.artUrl,
+    this.album,
+    this.albumArtist,
+    this.discNumber,
+    this.trackNumber,
+    this.genre,
+  });
 
   /// mpris:trackid
   ///
   /// D-Bus path: A unique identity for this track within the context of an MPRIS object (eg: tracklist).
-  // final String trackId;
+  final String? trackId;
 
   /// xesam:title
   ///
   /// String: The track title.
-  final String title;
+  final String? title;
 
   /// mpris:length
   ///
@@ -104,7 +106,8 @@ class _Metadata {
 
   DBusValue toValue() {
     final result = DBusDict.stringVariant({
-      "xesam:title": DBusString(title),
+      if (trackId != null) "mpris:trackid": DBusObjectPath(trackId!),
+      if (title != null) "xesam:title": DBusString(title!),
       if (length != null) "mpris:length": DBusInt64(length!.inMicroseconds),
       if (artist != null) "xesam:artist": DBusArray.string(artist!),
       if (lyrics != null) "xesam:asText": DBusString(lyrics!),
@@ -118,19 +121,22 @@ class _Metadata {
     return result;
   }
 
-  _Metadata copyWith(
-      {String? title,
-      Duration? length,
-      List<String>? artist,
-      String? lyrics,
-      String? artUrl,
-      String? album,
-      List<String>? albumArtist,
-      int? discNumber,
-      int? trackNumber,
-      List<String>? genre}) {
+  _Metadata copyWith({
+    String? title,
+    String? trackId,
+    Duration? length,
+    List<String>? artist,
+    String? lyrics,
+    String? artUrl,
+    String? album,
+    List<String>? albumArtist,
+    int? discNumber,
+    int? trackNumber,
+    List<String>? genre,
+  }) {
     return _Metadata(
       title: title ?? this.title,
+      trackId: trackId ?? this.trackId,
       length: length ?? this.length,
       artist: artist ?? this.artist,
       lyrics: lyrics ?? this.lyrics,

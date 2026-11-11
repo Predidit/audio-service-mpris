@@ -9,6 +9,7 @@ enum _MprisEventType {
   controlStop,
   openUri,
   position,
+  seek,
 }
 
 enum _MprisMethod { quit, raise }
@@ -56,7 +57,7 @@ class _MprisMediaPlayer extends DBusObject {
     'Seek': _MethodHandler((call) => _doSeek(call.values[0].asInt64()), signature: 'x'),
     'SetPosition': _MethodHandler(
         (call) =>
-            _doSetPosition(call.values[0].asObjectPath().toString(), call.values[1].asInt64()),
+            _doSetPosition(call.values[0].asObjectPath().value, call.values[1].asInt64()),
         signature: 'ox'),
     'OpenUri': _MethodHandler((call) => _doOpenUri(call.values[0].asString()), signature: 's'),
   });
@@ -215,7 +216,7 @@ class _MprisMediaPlayer extends DBusObject {
   final _metadataProperty = _DBusProperty<_Metadata>(
     name: 'Metadata',
     interfaceName: 'org.mpris.MediaPlayer2.Player',
-    initialValue: _Metadata(title: 'No title'),
+    initialValue: _Metadata(),
   );
 
   _Metadata get metadata => _metadataProperty.value;
@@ -307,10 +308,17 @@ class _MprisMediaPlayer extends DBusObject {
     name: 'Position',
     interfaceName: 'org.mpris.MediaPlayer2.Player',
     initialValue: Duration.zero,
+    changeNotification: PropertyChangeNotification.silent,
   );
 
   Duration get position => _positionProperty.value;
   set position(Duration value) => _positionProperty.value = value;
+
+  Future<void> emitSeeked(Duration position) => emitSignal(
+        'org.mpris.MediaPlayer2.Player',
+        'Seeked',
+        [DBusInt64(position.inMicroseconds)],
+      );
 
   void _emitEvent(_MprisEventType type, [Object? value]) {
     _eventStreamController.add(_MprisEvent(type, value));
@@ -370,12 +378,19 @@ class _MprisMediaPlayer extends DBusObject {
 
   /// Implementation of org.mpris.MediaPlayer2.Player.Seek()
   Future<DBusMethodResponse> _doSeek(int offset) async {
+    if(_canSeekProperty.value) {
+      _emitEvent(_MprisEventType.seek, Duration(microseconds: offset));
+    }
+
     return DBusMethodSuccessResponse([]);
   }
 
   /// Implementation of org.mpris.MediaPlayer2.Player.SetPosition()
   Future<DBusMethodResponse> _doSetPosition(String trackId, int position) async {
-    _emitEvent(_MprisEventType.position, Duration(microseconds: position));
+    if (_canSeekProperty.value && trackId == metadata.trackId) {
+      _emitEvent(_MprisEventType.position, Duration(microseconds: position));
+    }
+
     return DBusMethodSuccessResponse([]);
   }
 
