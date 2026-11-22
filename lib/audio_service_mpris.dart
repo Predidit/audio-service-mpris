@@ -11,12 +11,17 @@ part 'log_helper.dart';
 part 'metadata.dart';
 part 'mpris.dart';
 part 'mpris_facade.dart';
+part 'mpris_seek_handler.dart';
 
 class AudioServiceMpris extends AudioServicePlatform {
   late final DBusClient _dBusClient;
   late final _MprisMediaPlayer _mpris;
+  late final _MprisSeekHandler _mprisSeekHandler;
   AudioHandlerCallbacks? _handlerCallbacks;
   bool _isPlaying = false;
+  bool _isRegistered = false;
+  String? _serviceName;
+  String? _trackId;
 
   static void registerWith() {
     AudioServicePlatform.instance = AudioServiceMpris();
@@ -183,22 +188,23 @@ class AudioServiceMpris extends AudioServicePlatform {
   Future<void> configure(ConfigureRequest request) async {
     _dBusClient = DBusClient.session();
     _mpris = _MprisMediaPlayer();
+    _mprisSeekHandler = _MprisSeekHandler(mpris: _mpris);
 
     _listenToEvents();
     _listenToPropertyChanges();
     _listenToMethodEvents();
 
     await _dBusClient.registerObject(_mpris);
-    await _dBusClient.requestName(
-      'org.mpris.MediaPlayer2.${_defaults.dBusName}.instance$pid',
-      flags: {DBusRequestNameFlag.doNotQueue},
-    );
+    _serviceName = 'org.mpris.MediaPlayer2.${_defaults.dBusName}.instance$pid';
+    await _registerIfNeeded();
     _mpris.identity = _defaults.identity;
   }
 
   @override
   Future<void> setState(SetStateRequest request) async {
+    await _registerIfNeeded();
     _mpris.position = request.state.updatePosition;
+    _mpris.canSeek = request.state.systemActions.contains(MediaActionMessage.seek);
     _isPlaying = request.state.playing;
     _mpris.playbackState = _isPlaying ? 'Playing' : 'Paused';
     _mpris.shuffle = request.state.shuffleMode != AudioServiceShuffleModeMessage.none;
@@ -207,10 +213,18 @@ class AudioServiceMpris extends AudioServicePlatform {
       orElse: () => 'None',
     );
     _mpris.rate = request.state.speed;
+    _mprisSeekHandler.setPlaybackState(request.state);
   }
+
+  String _formatTrackId(String id) => '/Track/${id.replaceAll(RegExp(r'[^A-Za-z0-9_]+'), '_')}';
 
   @override
   Future<void> setMediaItem(SetMediaItemRequest request) async {
+    await _registerIfNeeded();
+    if (_trackId != request.mediaItem.id) {
+      _trackId = request.mediaItem.id;
+      _mprisSeekHandler.resetPlaybackState();
+    }
     List<String>? artist;
     if (request.mediaItem.artist != null) artist = [request.mediaItem.artist!];
 
@@ -218,17 +232,37 @@ class AudioServiceMpris extends AudioServicePlatform {
     if (request.mediaItem.genre != null) genre = [request.mediaItem.genre!];
 
     _mpris.metadata = _Metadata(
-        title: request.mediaItem.title,
-        length: request.mediaItem.duration,
-        artist: artist,
-        artUrl: request.mediaItem.artUri.toString(),
-        album: request.mediaItem.album,
-        genre: genre);
+      trackId: _formatTrackId(request.mediaItem.id),
+      title: request.mediaItem.title,
+      length: request.mediaItem.duration,
+      artist: artist,
+      artUrl: request.mediaItem.artUri.toString(),
+      album: request.mediaItem.album,
+      genre: genre,
+    );
   }
 
   @override
   Future<void> stopService(StopServiceRequest request) async {
+    _mprisSeekHandler.resetPlaybackState();
+    _trackId = null;
     _mpris.playbackState = 'Stopped';
+    _mpris.metadata = _Metadata();
+    await _unregisterIfNeeded();
+  }
+
+  Future<void> _registerIfNeeded() async {
+    if (_isRegistered || _serviceName == null) return;
+
+    await _dBusClient.requestName(_serviceName!, flags: {DBusRequestNameFlag.doNotQueue});
+    _isRegistered = true;
+  }
+
+  Future<void> _unregisterIfNeeded() async {
+    if (!_isRegistered || _serviceName == null) return;
+
+    await _dBusClient.releaseName(_serviceName!);
+    _isRegistered = false;
   }
 
   @override
@@ -265,6 +299,19 @@ class AudioServiceMpris extends AudioServicePlatform {
           _handlerCallbacks!.seek(SeekRequest(position: event.value as Duration));
         case _MprisEventType.openUri:
           _handlerCallbacks!.playFromUri(PlayFromUriRequest(uri: event.value as Uri));
+        case _MprisEventType.seek:
+          final offset = event.value as Duration;
+          Duration newPosition = _mpris.position + offset;
+          Duration? length = _mpris.metadata.length;
+
+          if(length != null && newPosition > length) {
+            newPosition = length;
+          }
+          else if(newPosition.isNegative) {
+            newPosition = Duration.zero;
+          }
+
+          _handlerCallbacks!.seek(SeekRequest(position: newPosition));
       }
     });
   }
